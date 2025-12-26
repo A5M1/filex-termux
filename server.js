@@ -70,7 +70,7 @@ const renderItems = (currentDir) => {
                 <div class="name-col">
                     ${isDir ? `<a href="#" hx-get="/list?dir=${encodeURIComponent(fullPath)}" hx-target="#file-list">${f}</a>` :
                       (isImg) ? `<a href="${rawUrl}" data-fancybox="gallery" data-caption="${f}">${f}</a>` :
-                      (isVid) ? `<a href="${rawUrl}" data-fancybox="gallery" data-type="video" data-caption="${f}">${f}</a>` :
+                      (isVid)?`<a href="${rawUrl}" data-fancybox data-type="html5video" data-caption="${f}" data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'>${f}</a>`:
                       `<a href="${rawUrl}" target="_blank">${f}</a>`}
                     <span class="meta-size">${size}</span>
                 </div>
