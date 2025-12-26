@@ -152,7 +152,7 @@ const renderItems = (currentDir) => {
         if (!as.isDirectory() && bs.isDirectory()) return 1;
         return a.localeCompare(b);
     });
-    
+
     const hasMedia = files.some(f => {
         const p = path.resolve(currentDir, f);
         try {
@@ -168,9 +168,13 @@ const renderItems = (currentDir) => {
     if (hasMedia) {
         const thumbDB = ensureThumbDB(currentDir);
         startThumbGeneration(currentDir, thumbDB);
-        
+
         html += `<div class="media-grid" id="media-grid" data-dir="${currentDir}">`;
-        
+
+        const excludedFromGrid = new Set();
+        const videoMap = new Map();
+        const jpgCandidates = new Set();
+
         files.forEach(f => {
             const full = path.resolve(currentDir, f);
             let s;
@@ -180,16 +184,57 @@ const renderItems = (currentDir) => {
                 return;
             }
             if (s.isDirectory()) return;
+            
             const ext = path.extname(f).toLowerCase();
+            const base = path.basename(f, ext);
+
+            const isVid = videoExts.includes(ext);
+            if (isVid) {
+                videoMap.set(f, full);
+                const jpgName = base + '.jpg';
+                if (files.includes(jpgName)) {
+                    jpgCandidates.add(jpgName);
+                }
+            }
+        });
+
+        jpgCandidates.forEach(jpgName => excludedFromGrid.add(jpgName));
+
+        files.forEach(f => {
+            const full = path.resolve(currentDir, f);
+            let s;
+            try {
+                s = fs.statSync(full);
+            } catch {
+                return;
+            }
+            if (s.isDirectory()) return;
+
+            if (excludedFromGrid.has(f)) return;
+
+            const ext = path.extname(f).toLowerCase();
+            
             if (!mediaExts.includes(ext)) return;
+            
             const raw = `/raw${full}`;
             const isVid = videoExts.includes(ext);
             let thumb = null;
-            if (isVid && thumbDB) {
-                thumb = getThumb(full, thumbDB);
+            
+            if (isVid) {
+                const base = path.basename(f, ext);
+                const jpgName = base + '.jpg';
+                
+                if (files.includes(jpgName)) {
+                    thumb = `/raw${path.resolve(currentDir, jpgName)}`;
+                } else {
+                    if (thumbDB) {
+                        thumb = getThumb(full, thumbDB);
+                    }
+                }
             }
             
             html += `<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'`:''} data-caption="${f}">`;
+            
             if (isVid) {
                 if (thumb) {
                     html += `<img src="${thumb}" loading="lazy" data-filename="${f}">`;
@@ -201,12 +246,12 @@ const renderItems = (currentDir) => {
             }
             html += `</a>`;
         });
-        
+
         html += `</div>`;
-        
+
         return html;
     }
-    
+
     files.forEach(f => {
         const full = path.resolve(currentDir, f);
         let s;
@@ -224,10 +269,9 @@ const renderItems = (currentDir) => {
         const size = isDir ? '' : (s.size > 1048576 ? (s.size / 1048576).toFixed(1) + ' MB' : (s.size / 1024).toFixed(1) + ' KB');
         html += `<div class="item file-row fade-in"><div class="file-info"><i class="${getIconClass(f,isDir)}"></i><div class="name-col">${isDir?`<a href="#" hx-get="/list?dir=${encodeURIComponent(full)}" hx-target="#file-list">${f}</a>`:isImg?`<a href="${raw}" data-fancybox data-caption="${f}">${f}</a>`:isVid?`<a href="${raw}" data-fancybox data-type="html5video" data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}' data-caption="${f}">${f}</a>`:`<a href="${raw}" target="_blank">${f}</a>`}<span class="meta-size">${size}</span></div></div><div class="actions">${isDir?`<a href="/zip?dir=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-archive-line"></i></a>`:''}${!isDir&&editable?`<button class="btn-icon" hx-get="/edit?file=${encodeURIComponent(full)}" hx-target="#file-list"><i class="ri-edit-2-line"></i></button>`:''}${!isDir?`<a href="/download?file=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-download-line"></i></a>`:''}<button class="btn-icon" hx-get="/rename-prompt?dir=${encodeURIComponent(currentDir)}&old=${encodeURIComponent(f)}" hx-target="#file-list"><i class="ri-pencil-line"></i></button><button class="btn-icon delete" hx-get="/delete?dir=${encodeURIComponent(currentDir)}&name=${encodeURIComponent(f)}" hx-target="#file-list" hx-confirm="Delete ${f}?"><i class="ri-delete-bin-line"></i></button></div></div>`;
     });
-    
+
     return html;
 };
-
 const layout = (content, currentPath) => `
 <!DOCTYPE html>
 <html lang="en">
