@@ -3,19 +3,17 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
-const {
-    exec,
-    execSync
-} = require('child_process');
+const { exec, execSync } = require('child_process');
 const Database = require('better-sqlite3');
+const WebSocket = require('ws');
 
 const HOST = '0.0.0.0';
 const PORT = '3390';
 const ROOT = process.env.HOME || process.cwd();
-const upload = multer({
-    dest: 'uploads/'
-});
+const upload = multer({ dest: 'uploads/' });
 const videoExts = ['.mp4', '.webm', '.ogg', '.mov'];
+
+const wssClients = new Map();
 
 function ensureThumbDB(dir) {
     const dbPath = path.join(dir, '.thumbs.db');
@@ -32,10 +30,18 @@ function ensureThumbDB(dir) {
     }
 }
 
+function getThumb(fullPath, db) {
+    if (!db) return null;
+    const row = db.prepare('SELECT thumb FROM thumbs WHERE filename=?').get(path.basename(fullPath));
+    return row ? `data:image/jpeg;base64,${row.thumb.toString('base64')}` : null;
+}
+
 function generateThumb(fullPath, db) {
     const f = path.basename(fullPath);
     const ext = path.extname(f).toLowerCase();
+    if (!videoExts.includes(ext)) return;
     if (db.prepare('SELECT 1 FROM thumbs WHERE filename=?').get(f)) return;
+    
     const tmp = path.join(path.dirname(fullPath), '.tmp_thumb.jpg');
     try {
         execSync(`ffmpeg -y -i "${fullPath}" -ss 00:00:01.000 -vframes 1 "${tmp}" -hide_banner -loglevel error`);
@@ -43,26 +49,76 @@ function generateThumb(fullPath, db) {
         db.prepare('INSERT OR REPLACE INTO thumbs(filename, ext, thumb) VALUES(?,?,?)')
             .run(f, ext, img);
         fs.unlinkSync(tmp);
-    } catch (e) {}
+        
+        const dir = path.dirname(fullPath);
+        if (wssClients.has(dir)) {
+            const clients = wssClients.get(dir);
+            clients.forEach(client => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(JSON.stringify({
+                        type: 'thumb_update',
+                        filename: f,
+                        thumb: `data:image/jpeg;base64,${img.toString('base64')}`
+                    }));
+                }
+            });
+        }
+    } catch (e) {
+        console.error('Thumb generation failed:', e.message);
+    }
 }
 
-function getThumb(fullPath, db) {
-    if (!db) return null;
-    const row = db.prepare('SELECT thumb FROM thumbs WHERE filename=?').get(path.basename(fullPath));
-    return row ? `data:image/jpeg;base64,${row.thumb.toString('base64')}` : null;
+function startThumbGeneration(dir, db) {
+    const files = fs.readdirSync(dir).filter(f => !f.endsWith('.thumbs.db'));
+    const videos = files.filter(f => {
+        const fullPath = path.join(dir, f);
+        try {
+            const s = fs.statSync(fullPath);
+            return s.isFile() && videoExts.includes(path.extname(f).toLowerCase());
+        } catch {
+            return false;
+        }
+    });
+    
+    videos.forEach(f => {
+        const fullPath = path.join(dir, f);
+        if (!db.prepare('SELECT 1 FROM thumbs WHERE filename=?').get(f)) {
+            setTimeout(() => generateThumb(fullPath, db), 100);
+        }
+    });
 }
 
 const app = express();
+const server = require('http').createServer(app);
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', (ws, req) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const dir = url.searchParams.get('dir');
+    
+    if (dir) {
+        if (!wssClients.has(dir)) {
+            wssClients.set(dir, new Set());
+        }
+        wssClients.get(dir).add(ws);
+        
+        ws.on('close', () => {
+            if (wssClients.has(dir)) {
+                wssClients.get(dir).delete(ws);
+                if (wssClients.get(dir).size === 0) {
+                    wssClients.delete(dir);
+                }
+            }
+        });
+    }
+});
+
 app.use(express.json());
-app.use(express.urlencoded({
-    extended: true
-}));
+app.use(express.urlencoded({ extended: true }));
 
 app.get(/^\/raw\/(.*)/, (req, res) => {
     const filePath = '/' + req.params[0];
-    res.sendFile(filePath, {
-        acceptRanges: true
-    });
+    res.sendFile(filePath, { acceptRanges: true });
 });
 
 const getIconClass = (f, isDir) => {
@@ -78,9 +134,10 @@ const getIconClass = (f, isDir) => {
 };
 
 const renderItems = (currentDir) => {
-    const files = fs.readdirSync(currentDir);
+    const files = fs.readdirSync(currentDir).filter(f => f !== '.thumbs.db');
     const parentDir = path.resolve(currentDir, '..');
     const mediaExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4', '.webm', '.ogg', '.mov'];
+    
     files.sort((a, b) => {
         const ap = path.resolve(currentDir, a),
             bp = path.resolve(currentDir, b);
@@ -95,6 +152,7 @@ const renderItems = (currentDir) => {
         if (!as.isDirectory() && bs.isDirectory()) return 1;
         return a.localeCompare(b);
     });
+    
     const hasMedia = files.some(f => {
         const p = path.resolve(currentDir, f);
         try {
@@ -104,11 +162,15 @@ const renderItems = (currentDir) => {
         }
         return mediaExts.includes(path.extname(f).toLowerCase());
     });
+    
     let html = `<div class="item parent-dir" hx-get="/list?dir=${encodeURIComponent(parentDir)}" hx-target="#file-list"><div class="file-info"><i class="ri-arrow-go-back-line"></i><span>..</span></div></div>`;
-    let thumbDB;
+    
     if (hasMedia) {
-        thumbDB = ensureThumbDB(currentDir);
-        html += `<div class="media-grid">`;
+        const thumbDB = ensureThumbDB(currentDir);
+        startThumbGeneration(currentDir, thumbDB);
+        
+        html += `<div class="media-grid" id="media-grid" data-dir="${currentDir}">`;
+        
         files.forEach(f => {
             const full = path.resolve(currentDir, f);
             let s;
@@ -124,13 +186,27 @@ const renderItems = (currentDir) => {
             const isVid = videoExts.includes(ext);
             let thumb = null;
             if (isVid && thumbDB) {
-                generateThumb(full, thumbDB);
                 thumb = getThumb(full, thumbDB);
             }
-            html += `<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'`:''} data-caption="${f}">${isVid? (thumb? `<img src="${thumb}" loading="lazy">`:`<video preload="metadata" muted playsinline></video>`):`<img src="${raw}" loading="lazy" decoding="async">`}</a>`;
+            
+            html += `<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'`:''} data-caption="${f}">`;
+            if (isVid) {
+                if (thumb) {
+                    html += `<img src="${thumb}" loading="lazy" data-filename="${f}">`;
+                } else {
+                    html += `<video preload="metadata" muted playsinline data-filename="${f}"></video>`;
+                }
+            } else {
+                html += `<img src="${raw}" loading="lazy" decoding="async">`;
+            }
+            html += `</a>`;
         });
+        
         html += `</div>`;
+        
+        return html;
     }
+    
     files.forEach(f => {
         const full = path.resolve(currentDir, f);
         let s;
@@ -148,6 +224,7 @@ const renderItems = (currentDir) => {
         const size = isDir ? '' : (s.size > 1048576 ? (s.size / 1048576).toFixed(1) + ' MB' : (s.size / 1024).toFixed(1) + ' KB');
         html += `<div class="item file-row fade-in"><div class="file-info"><i class="${getIconClass(f,isDir)}"></i><div class="name-col">${isDir?`<a href="#" hx-get="/list?dir=${encodeURIComponent(full)}" hx-target="#file-list">${f}</a>`:isImg?`<a href="${raw}" data-fancybox data-caption="${f}">${f}</a>`:isVid?`<a href="${raw}" data-fancybox data-type="html5video" data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}' data-caption="${f}">${f}</a>`:`<a href="${raw}" target="_blank">${f}</a>`}<span class="meta-size">${size}</span></div></div><div class="actions">${isDir?`<a href="/zip?dir=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-archive-line"></i></a>`:''}${!isDir&&editable?`<button class="btn-icon" hx-get="/edit?file=${encodeURIComponent(full)}" hx-target="#file-list"><i class="ri-edit-2-line"></i></button>`:''}${!isDir?`<a href="/download?file=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-download-line"></i></a>`:''}<button class="btn-icon" hx-get="/rename-prompt?dir=${encodeURIComponent(currentDir)}&old=${encodeURIComponent(f)}" hx-target="#file-list"><i class="ri-pencil-line"></i></button><button class="btn-icon delete" hx-get="/delete?dir=${encodeURIComponent(currentDir)}&name=${encodeURIComponent(f)}" hx-target="#file-list" hx-confirm="Delete ${f}?"><i class="ri-delete-bin-line"></i></button></div></div>`;
     });
+    
     return html;
 };
 
@@ -178,7 +255,7 @@ const layout = (content, currentPath) => `
 --folder:#fff;
 --radius:8px;
 }
- .media-grid{
+.media-grid{
 display:grid;
 grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
 gap:14px;
@@ -441,10 +518,37 @@ margin-bottom:8px;
                 e.detail.elt.reset();
             }
             Fancybox.bind("[data-fancybox]", {});
+            
+            const mediaGrid = document.getElementById('media-grid');
+            if (mediaGrid) {
+                const dir = mediaGrid.getAttribute('data-dir');
+                if (dir && window.location.protocol === 'http:') {
+                    const ws = new WebSocket(`ws://${window.location.host}/ws?dir=${encodeURIComponent(dir)}`);
+                    
+                    ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.type === 'thumb_update') {
+                                const img = document.querySelector(`.media-item img[data-filename="${data.filename}"]`);
+                                if (img) {
+                                    img.src = data.thumb;
+                                    img.style.opacity = '1';
+                                }
+                            }
+                        } catch (e) {
+                            console.error('WebSocket message parse error:', e);
+                        }
+                    };
+                    
+                    ws.onopen = () => console.log('WebSocket connected for', dir);
+                    ws.onclose = () => console.log('WebSocket disconnected for', dir);
+                }
+            }
         });
     </script>
 </body>
 </html>`;
+
 const update = (res, dir) => {
     res.setHeader('X-Path', dir);
     res.send(renderItems(dir));
@@ -464,23 +568,18 @@ app.post('/upload', upload.single('file'), (req, res) => {
 });
 app.post('/mkdir', (req, res) => {
     try {
-        fs.mkdirSync(path.join(req.body.path, req.body.name), {
-            recursive: true
-        });
+        fs.mkdirSync(path.join(req.body.path, req.body.name), { recursive: true });
     } catch {}
     update(res, req.body.path);
 });
 app.get('/download', (req, res) => res.download(req.query.file));
 app.get('/zip', (req, res) => {
     const dirPath = req.query.dir;
-    const archive = archiver('zip', {
-        zlib: {
-            level: 9
-        }
-    });
+    const archive = archiver('zip', { zlib: { level: 9 } });
     res.attachment(`${path.basename(dirPath)}.zip`);
     archive.pipe(res);
     archive.directory(dirPath, false);
     archive.finalize();
 });
-app.listen(PORT, HOST, () => console.log(`Explorer: http://${HOST}:${PORT}`));
+
+server.listen(PORT, HOST, () => console.log(`Explorer: http://${HOST}:${PORT}`));
