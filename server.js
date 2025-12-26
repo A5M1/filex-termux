@@ -121,6 +121,25 @@ app.get(/^\/raw\/(.*)/, (req, res) => {
     res.sendFile(filePath, { acceptRanges: true });
 });
 
+app.get(/^\/thumb\/(.*)/, (req, res) => {
+    const fullPath = '/' + req.params[0];
+    const dir = path.dirname(fullPath);
+    const db = ensureThumbDB(dir);
+    
+    if (!db) {
+        res.status(404).send('DB not available');
+        return;
+    }
+    
+    const row = db.prepare('SELECT thumb FROM thumbs WHERE filename=?').get(path.basename(fullPath));
+    if (row) {
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.send(row.thumb);
+    } else {
+        res.status(404).send('Thumbnail not found');
+    }
+});
+
 const getIconClass = (f, isDir) => {
     if (isDir) return 'ri-folder-3-fill icon-dir';
     const ext = path.extname(f).toLowerCase();
@@ -237,7 +256,11 @@ const renderItems = (currentDir) => {
             
             if (isVid) {
                 if (thumb) {
-                    html += `<img src="${thumb}" loading="lazy" data-filename="${f}" data-video="${raw}">`;
+                    if (thumb.startsWith('data:')) {
+                        html += `<img src="${thumb}" loading="lazy" data-filename="${f}" data-video="${raw}">`;
+                    } else {
+                        html += `<img src="${thumb}" loading="lazy" data-filename="${f}" data-video="${raw}">`;
+                    }
                 } else {
                     html += `<video preload="metadata" muted playsinline data-filename="${f}" data-video="${raw}"></video>`;
                 }
@@ -565,6 +588,7 @@ grid-template-columns:repeat(2,1fr);
             if(p) {
                 document.getElementById('path-display').value = p;
                 document.querySelectorAll('[id^="p-"]').forEach(el => el.value = p);
+                localStorage.setItem('currentPath', p);
             }
             if(e.detail.target.id === 'console-output') {
                 e.detail.target.scrollTop = e.detail.target.scrollHeight;
@@ -617,7 +641,6 @@ grid-template-columns:repeat(2,1fr);
                         preview.muted = true;
                         preview.loop = true;
                         preview.playsInline = true;
-                        preview.preload = 'auto';
                         item.appendChild(preview);
                         
                         setTimeout(() => {
@@ -675,6 +698,18 @@ grid-template-columns:repeat(2,1fr);
                     });
                 }
             });
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const savedPath = localStorage.getItem('currentPath');
+            if (savedPath) {
+                const currentPath = document.getElementById('path-display').value;
+                if (currentPath !== savedPath) {
+                    document.getElementById('path-display').value = savedPath;
+                    document.querySelectorAll('[id^="p-"]').forEach(el => el.value = savedPath);
+                    document.querySelector('form[htmx-get="/list"]').requestSubmit();
+                }
+            }
         });
     </script>
 </body>
