@@ -421,13 +421,18 @@ app.post('/save', (req, res) => {
     update(res, path.dirname(req.body.file));
 });
 
-app.post('/shell', (req, res) => {
-    const { cmd, path: cwd } = req.body;
-    exec(cmd, { cwd }, (err, stdout, stderr) => {
-        const output = stdout || stderr || (err ? err.message : '');
-        res.send(`\n> ${cmd}\n${output}`);
+app.post('/shell',(req,res)=>{
+const cmd=req.body.cmd.trim();
+    if(cmd==='clear'||cmd==='cls'){
+        res.send('<div id="console-output" hx-swap-oob="true"></div>');
+        return;
+    }
+    exec(cmd,{cwd:req.body.path},(err,stdout,stderr)=>{
+        const out=stdout||stderr||(err?err.message:'');
+        res.send(`\n> ${cmd}\n${out}`);
     });
 });
+
 
 app.get('/rename-prompt', (req, res) => {
     const { dir, old } = req.query;
