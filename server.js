@@ -63,8 +63,10 @@ if(!mediaExts.includes(ext))return;
 const raw=`/raw${full}`;
 const isVid=['.mp4','.webm','.ogg','.mov'].includes(ext);
 html+=`
-<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":false,"playsinline":true}'`:''} data-caption="${f}">
-${isVid?`<video src="${raw}" autoplay loop muted playsinline></video>`:`<img src="${raw}">`}
+<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'`:''} data-caption="${f}">
+${isVid?
+`<video preload="metadata" muted playsinline></video>`:
+`<img src="${raw}" loading="lazy" decoding="async">`}
 </a>`;
 });
 html+=`</div>`;
@@ -130,17 +132,17 @@ const layout = (content, currentPath) => `
 --folder:#fff;
 --radius:8px;
 }
-    .media-grid{
+ .media-grid{
 display:grid;
-grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
-gap:10px;
-padding:10px;
+grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+gap:14px;
+padding:14px;
 }
 .media-item{
 position:relative;
 aspect-ratio:1/1;
 overflow:hidden;
-border-radius:6px;
+border-radius:8px;
 background:#000;
 }
 .media-item img,
@@ -150,8 +152,11 @@ height:100%;
 object-fit:cover;
 display:block;
 }
-.media-item video{pointer-events:none}
-
+.media-item video{
+pointer-events:none;
+background:#000;
+}
+   
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 body{
 background:var(--bg-app);
