@@ -3,23 +3,68 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
-const { exec } = require('child_process');
+const {
+    exec,
+    execSync
+} = require('child_process');
+const Database = require('better-sqlite3');
 
 const HOST = '0.0.0.0';
-const app = express();
-const upload = multer({ dest: 'uploads/' });
-const ROOT = process.env.HOME || process.cwd();
 const PORT = '3390';
+const ROOT = process.env.HOME || process.cwd();
+const upload = multer({
+    dest: 'uploads/'
+});
+const videoExts = ['.mp4', '.webm', '.ogg', '.mov'];
 
+function ensureThumbDB(dir) {
+    const dbPath = path.join(dir, '.thumbs.db');
+    try {
+        const db = new Database(dbPath);
+        db.exec(`CREATE TABLE IF NOT EXISTS thumbs (
+            filename TEXT PRIMARY KEY,
+            ext TEXT,
+            thumb BLOB
+        )`);
+        return db;
+    } catch (e) {
+        return null;
+    }
+}
+
+function generateThumb(fullPath, db) {
+    const f = path.basename(fullPath);
+    const ext = path.extname(f).toLowerCase();
+    if (db.prepare('SELECT 1 FROM thumbs WHERE filename=?').get(f)) return;
+    const tmp = path.join(path.dirname(fullPath), '.tmp_thumb.jpg');
+    try {
+        execSync(`ffmpeg -y -i "${fullPath}" -ss 00:00:01.000 -vframes 1 "${tmp}" -hide_banner -loglevel error`);
+        const img = fs.readFileSync(tmp);
+        db.prepare('INSERT OR REPLACE INTO thumbs(filename, ext, thumb) VALUES(?,?,?)')
+            .run(f, ext, img);
+        fs.unlinkSync(tmp);
+    } catch (e) {}
+}
+
+function getThumb(fullPath, db) {
+    if (!db) return null;
+    const row = db.prepare('SELECT thumb FROM thumbs WHERE filename=?').get(path.basename(fullPath));
+    return row ? `data:image/jpeg;base64,${row.thumb.toString('base64')}` : null;
+}
+
+const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({
+    extended: true
+}));
 
 app.get(/^\/raw\/(.*)/, (req, res) => {
     const filePath = '/' + req.params[0];
-    res.sendFile(filePath, { acceptRanges: true });
+    res.sendFile(filePath, {
+        acceptRanges: true
+    });
 });
 
-// Helper: Get Remix Icon class based on file type
 const getIconClass = (f, isDir) => {
     if (isDir) return 'ri-folder-3-fill icon-dir';
     const ext = path.extname(f).toLowerCase();
@@ -32,77 +77,78 @@ const getIconClass = (f, isDir) => {
     return 'ri-file-line icon-default';
 };
 
-const renderItems=(currentDir)=>{
-const files=fs.readdirSync(currentDir);
-const parentDir=path.resolve(currentDir,'..');
-const mediaExts=['.jpg','.jpeg','.png','.gif','.webp','.svg','.mp4','.webm','.ogg','.mov'];
-files.sort((a,b)=>{
-const ap=path.resolve(currentDir,a),bp=path.resolve(currentDir,b);
-let as,bs;try{as=fs.statSync(ap);bs=fs.statSync(bp)}catch(e){return 0}
-if(as.isDirectory()&&!bs.isDirectory())return-1;
-if(!as.isDirectory()&&bs.isDirectory())return 1;
-return a.localeCompare(b)
-});
-const hasMedia=files.some(f=>{
-const p=path.resolve(currentDir,f);
-try{if(fs.statSync(p).isDirectory())return false}catch(e){return false}
-return mediaExts.includes(path.extname(f).toLowerCase())
-});
-let html=`
-<div class="item parent-dir" hx-get="/list?dir=${encodeURIComponent(parentDir)}" hx-target="#file-list">
-<div class="file-info"><i class="ri-arrow-go-back-line"></i><span>..</span></div>
-</div>`;
-if(hasMedia){
-html+=`<div class="media-grid">`;
-files.forEach(f=>{
-const full=path.resolve(currentDir,f);
-let s;try{s=fs.statSync(full)}catch(e){return}
-if(s.isDirectory())return;
-const ext=path.extname(f).toLowerCase();
-if(!mediaExts.includes(ext))return;
-const raw=`/raw${full}`;
-const isVid=['.mp4','.webm','.ogg','.mov'].includes(ext);
-html+=`
-<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'`:''} data-caption="${f}">
-${isVid?
-`<video preload="metadata" muted playsinline></video>`:
-`<img src="${raw}" loading="lazy" decoding="async">`}
-</a>`;
-});
-html+=`</div>`;
-}
-files.forEach(f=>{
-const full=path.resolve(currentDir,f);
-let s;try{s=fs.statSync(full)}catch(e){return}
-const isDir=s.isDirectory();
-const ext=path.extname(f).toLowerCase();
-const editable=['.txt','.js','.json','.html','.css','.md','.py','.sh','.env','.yaml','.lua','.php','.xml','.ini','.conf'].includes(ext)||f.startsWith('.');
-const isImg=['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(ext);
-const isVid=['.mp4','.webm','.ogg','.mov'].includes(ext);
-const raw=`/raw${full}`;
-const size=isDir?'':(s.size>1048576?(s.size/1048576).toFixed(1)+' MB':(s.size/1024).toFixed(1)+' KB');
-html+=`
-<div class="item file-row fade-in">
-<div class="file-info">
-<i class="${getIconClass(f,isDir)}"></i>
-<div class="name-col">
-${isDir?`<a href="#" hx-get="/list?dir=${encodeURIComponent(full)}" hx-target="#file-list">${f}</a>`:
-isImg?`<a href="${raw}" data-fancybox data-caption="${f}">${f}</a>`:
-isVid?`<a href="${raw}" data-fancybox data-type="html5video" data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}' data-caption="${f}">${f}</a>`:
-`<a href="${raw}" target="_blank">${f}</a>`}
-<span class="meta-size">${size}</span>
-</div>
-</div>
-<div class="actions">
-${isDir?`<a href="/zip?dir=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-archive-line"></i></a>`:''}
-${!isDir&&editable?`<button class="btn-icon" hx-get="/edit?file=${encodeURIComponent(full)}" hx-target="#file-list"><i class="ri-edit-2-line"></i></button>`:''}
-${!isDir?`<a href="/download?file=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-download-line"></i></a>`:''}
-<button class="btn-icon" hx-get="/rename-prompt?dir=${encodeURIComponent(currentDir)}&old=${encodeURIComponent(f)}" hx-target="#file-list"><i class="ri-pencil-line"></i></button>
-<button class="btn-icon delete" hx-get="/delete?dir=${encodeURIComponent(currentDir)}&name=${encodeURIComponent(f)}" hx-target="#file-list" hx-confirm="Delete ${f}?"><i class="ri-delete-bin-line"></i></button>
-</div>
-</div>`;
-});
-return html;
+const renderItems = (currentDir) => {
+    const files = fs.readdirSync(currentDir);
+    const parentDir = path.resolve(currentDir, '..');
+    const mediaExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.mp4', '.webm', '.ogg', '.mov'];
+    files.sort((a, b) => {
+        const ap = path.resolve(currentDir, a),
+            bp = path.resolve(currentDir, b);
+        let as, bs;
+        try {
+            as = fs.statSync(ap);
+            bs = fs.statSync(bp);
+        } catch {
+            return 0;
+        }
+        if (as.isDirectory() && !bs.isDirectory()) return -1;
+        if (!as.isDirectory() && bs.isDirectory()) return 1;
+        return a.localeCompare(b);
+    });
+    const hasMedia = files.some(f => {
+        const p = path.resolve(currentDir, f);
+        try {
+            if (fs.statSync(p).isDirectory()) return false;
+        } catch {
+            return false;
+        }
+        return mediaExts.includes(path.extname(f).toLowerCase());
+    });
+    let html = `<div class="item parent-dir" hx-get="/list?dir=${encodeURIComponent(parentDir)}" hx-target="#file-list"><div class="file-info"><i class="ri-arrow-go-back-line"></i><span>..</span></div></div>`;
+    let thumbDB;
+    if (hasMedia) {
+        thumbDB = ensureThumbDB(currentDir);
+        html += `<div class="media-grid">`;
+        files.forEach(f => {
+            const full = path.resolve(currentDir, f);
+            let s;
+            try {
+                s = fs.statSync(full);
+            } catch {
+                return;
+            }
+            if (s.isDirectory()) return;
+            const ext = path.extname(f).toLowerCase();
+            if (!mediaExts.includes(ext)) return;
+            const raw = `/raw${full}`;
+            const isVid = videoExts.includes(ext);
+            let thumb = null;
+            if (isVid && thumbDB) {
+                generateThumb(full, thumbDB);
+                thumb = getThumb(full, thumbDB);
+            }
+            html += `<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'`:''} data-caption="${f}">${isVid? (thumb? `<img src="${thumb}" loading="lazy">`:`<video preload="metadata" muted playsinline></video>`):`<img src="${raw}" loading="lazy" decoding="async">`}</a>`;
+        });
+        html += `</div>`;
+    }
+    files.forEach(f => {
+        const full = path.resolve(currentDir, f);
+        let s;
+        try {
+            s = fs.statSync(full);
+        } catch {
+            return;
+        }
+        const isDir = s.isDirectory();
+        const ext = path.extname(f).toLowerCase();
+        const editable = ['.txt', '.js', '.json', '.html', '.css', '.md', '.py', '.sh', '.env', '.yaml', '.lua', '.php', '.xml', '.ini', '.conf'].includes(ext) || f.startsWith('.');
+        const isImg = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'].includes(ext);
+        const isVid = videoExts.includes(ext);
+        const raw = `/raw${full}`;
+        const size = isDir ? '' : (s.size > 1048576 ? (s.size / 1048576).toFixed(1) + ' MB' : (s.size / 1024).toFixed(1) + ' KB');
+        html += `<div class="item file-row fade-in"><div class="file-info"><i class="${getIconClass(f,isDir)}"></i><div class="name-col">${isDir?`<a href="#" hx-get="/list?dir=${encodeURIComponent(full)}" hx-target="#file-list">${f}</a>`:isImg?`<a href="${raw}" data-fancybox data-caption="${f}">${f}</a>`:isVid?`<a href="${raw}" data-fancybox data-type="html5video" data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}' data-caption="${f}">${f}</a>`:`<a href="${raw}" target="_blank">${f}</a>`}<span class="meta-size">${size}</span></div></div><div class="actions">${isDir?`<a href="/zip?dir=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-archive-line"></i></a>`:''}${!isDir&&editable?`<button class="btn-icon" hx-get="/edit?file=${encodeURIComponent(full)}" hx-target="#file-list"><i class="ri-edit-2-line"></i></button>`:''}${!isDir?`<a href="/download?file=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-download-line"></i></a>`:''}<button class="btn-icon" hx-get="/rename-prompt?dir=${encodeURIComponent(currentDir)}&old=${encodeURIComponent(f)}" hx-target="#file-list"><i class="ri-pencil-line"></i></button><button class="btn-icon delete" hx-get="/delete?dir=${encodeURIComponent(currentDir)}&name=${encodeURIComponent(f)}" hx-target="#file-list" hx-confirm="Delete ${f}?"><i class="ri-delete-bin-line"></i></button></div></div>`;
+    });
+    return html;
 };
 
 const layout = (content, currentPath) => `
@@ -399,7 +445,6 @@ margin-bottom:8px;
     </script>
 </body>
 </html>`;
-
 const update = (res, dir) => {
     res.setHeader('X-Path', dir);
     res.send(renderItems(dir));
@@ -409,99 +454,33 @@ app.get('/', (req, res) => {
     const dir = path.resolve(req.query.dir || ROOT);
     res.send(layout(renderItems(dir), dir));
 });
-
 app.get('/list', (req, res) => update(res, path.resolve(req.query.dir)));
-
 app.post('/upload', upload.single('file'), (req, res) => {
-    if(!req.file) return update(res, req.body.path);
+    if (!req.file) return update(res, req.body.path);
     const dest = path.join(req.body.path, req.file.originalname);
     if (fs.existsSync(dest)) fs.unlinkSync(dest);
     fs.renameSync(req.file.path, dest);
     update(res, req.body.path);
 });
-
 app.post('/mkdir', (req, res) => {
-    try { fs.mkdirSync(path.join(req.body.path, req.body.name), { recursive: true }); } catch(e){}
+    try {
+        fs.mkdirSync(path.join(req.body.path, req.body.name), {
+            recursive: true
+        });
+    } catch {}
     update(res, req.body.path);
 });
-
 app.get('/download', (req, res) => res.download(req.query.file));
-
 app.get('/zip', (req, res) => {
     const dirPath = req.query.dir;
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archive = archiver('zip', {
+        zlib: {
+            level: 9
+        }
+    });
     res.attachment(`${path.basename(dirPath)}.zip`);
     archive.pipe(res);
     archive.directory(dirPath, false);
     archive.finalize();
 });
-
-app.get('/edit', (req, res) => {
-    const file = req.query.file;
-    let content = '';
-    try { content = fs.readFileSync(file, 'utf8'); } catch(e) { content = "Error reading file"; }
-    res.send(`
-    <div class="editor-container fade-in">
-        <div class="editor-header">
-            <div style="display:flex; align-items:center; gap:10px;">
-                <i class="ri-file-code-line" style="color:var(--primary)"></i> 
-                <strong>${path.basename(file)}</strong>
-            </div>
-            <div style="display:flex; gap:10px;">
-                <button type="button" hx-get="/list?dir=${encodeURIComponent(path.dirname(file))}" hx-target="#file-list" style="background:transparent; border:none; color:var(--text-muted)">Cancel</button>
-                <button class="btn-primary" onclick="document.getElementById('save-form').requestSubmit()">Save</button>
-            </div>
-        </div>
-        <form id="save-form" hx-post="/save" hx-target="#file-list" style="flex-grow:1; display:flex;">
-            <input type="hidden" name="file" value="${file}">
-            <textarea name="content" class="editor" spellcheck="false">${content.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</textarea>
-        </form>
-    </div>`);
-});
-
-app.post('/save', (req, res) => {
-    fs.writeFileSync(req.body.file, req.body.content);
-    update(res, path.dirname(req.body.file));
-});
-
-app.post('/shell',(req,res)=>{
-const cmd=req.body.cmd.trim();
-    if(cmd==='clear'||cmd==='cls'){
-        res.send('<div id="console-output" hx-swap-oob="true"></div>');
-        return;
-    }
-    exec(cmd,{cwd:req.body.path},(err,stdout,stderr)=>{
-        const out=stdout||stderr||(err?err.message:'');
-        res.send(`\n> ${cmd}\n${out}`);
-    });
-});
-
-
-app.get('/rename-prompt', (req, res) => {
-    const { dir, old } = req.query;
-    res.send(`<div class="item fade-in" style="background:var(--bg-input)">
-        <form hx-get="/rename" hx-target="#file-list" style="width:100%; display:flex; gap:10px; align-items:center;">
-            <i class="ri-pencil-fill" style="color:var(--primary)"></i>
-            <input type="hidden" name="dir" value="${dir}"><input type="hidden" name="old" value="${old}">
-            <input name="new" value="${old}" autofocus style="flex-grow:1; background:var(--bg-app); border:1px solid var(--border);">
-            <button type="submit" class="btn-primary"><i class="ri-check-line"></i></button>
-            <button type="button" class="btn-icon" hx-get="/list?dir=${encodeURIComponent(dir)}" hx-target="#file-list"><i class="ri-close-line"></i></button>
-        </form>
-    </div>`);
-});
-
-app.get('/rename', (req, res) => {
-    try { fs.renameSync(path.join(req.query.dir, req.query.old), path.join(req.query.dir, req.query.new)); } catch(e){}
-    update(res, req.query.dir);
-});
-
-app.get('/delete', (req, res) => {
-    const p = path.join(req.query.dir, req.query.name);
-    try { 
-        const stats = fs.statSync(p);
-        stats.isDirectory() ? fs.rmSync(p, { recursive: true }) : fs.unlinkSync(p);
-    } catch(e){}
-    update(res, req.query.dir);
-});
-
 app.listen(PORT, HOST, () => console.log(`Explorer: http://${HOST}:${PORT}`));
