@@ -523,7 +523,7 @@ margin-bottom:8px;
             if (mediaGrid) {
                 const dir = mediaGrid.getAttribute('data-dir');
                 if (dir && window.location.protocol === 'http:') {
-                    const ws = new WebSocket(\`ws://${location.host}/ws?dir=${encodeURIComponent(dir)}\`);
+                    const ws = new WebSocket(\`ws://\${location.host}/ws?dir=\${encodeURIComponent(dir)}\`);
                     
                     ws.onmessage = (event) => {
                         try {
