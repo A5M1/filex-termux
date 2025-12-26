@@ -738,6 +738,100 @@ app.post('/mkdir', (req, res) => {
     } catch {}
     update(res, req.body.path);
 });
+app.get('/delete', (req, res) => {
+    const { dir, name } = req.query;
+    const fullPath = path.join(dir, name);
+    try {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+    } catch (e) {
+        console.error(e);
+    }
+    update(res, dir);
+});
+app.get('/rename-prompt', (req, res) => {
+    const { dir, old } = req.query;
+    const html = `
+    <div style="padding: 20px; text-align: center;">
+        <h3 style="margin-bottom: 15px;">Rename: ${old}</h3>
+        <form hx-post="/rename" hx-target="#file-list" style="max-width: 300px; margin: 0 auto; display:flex; gap:10px;">
+            <input type="hidden" name="dir" value="${dir}">
+            <input type="hidden" name="old" value="${old}">
+            <input name="newname" value="${old}" style="flex:1" autofocus onfocus="this.select()">
+            <button type="submit" class="btn-primary">Save</button>
+            <button type="button" hx-get="/list?dir=${encodeURIComponent(dir)}" hx-target="#file-list">Cancel</button>
+        </form>
+    </div>
+    `;
+    res.send(html);
+});
+
+app.post('/rename', (req, res) => {
+    const { dir, old, newname } = req.body;
+    try {
+        fs.renameSync(path.join(dir, old), path.join(dir, newname));
+    } catch (e) {
+        console.error(e);
+    }
+    update(res, dir);
+});
+
+app.get('/edit', (req, res) => {
+    const file = req.query.file;
+    let content = '';
+    try {
+        content = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+        content = 'Error reading file: ' + e.message;
+    }
+
+    const safeContent = content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const parent = path.dirname(file);
+
+    const html = `
+    <div class="editor-container">
+        <div class="editor-header">
+            <span style="font-family:'JetBrains Mono'">${path.basename(file)}</span>
+            <div class="actions">
+                <button class="btn-primary" hx-post="/save" hx-include="#editor-form" hx-target="#file-list">
+                    <i class="ri-save-3-line"></i> Save
+                </button>
+                <button hx-get="/list?dir=${encodeURIComponent(parent)}" hx-target="#file-list">
+                    <i class="ri-close-line"></i> Close
+                </button>
+            </div>
+        </div>
+        <form id="editor-form" style="display:flex; flex-direction:column; flex-grow:1; height:100%;">
+            <input type="hidden" name="file" value="${file}">
+            <textarea name="content" class="editor" spellcheck="false" style="height: 60vh;">${safeContent}</textarea>
+        </form>
+    </div>
+    `;
+    res.send(html);
+});
+
+app.post('/save', (req, res) => {
+    const { file, content } = req.body;
+    try {
+        fs.writeFileSync(file, content, 'utf8');
+        res.redirect(`/edit?file=${encodeURIComponent(file)}`);
+    } catch (e) {
+        res.send(`<div style="padding:20px; color:red;">Error saving: ${e.message} <button hx-get="/list?dir=${encodeURIComponent(path.dirname(file))}" hx-target="#file-list">Back</button></div>`);
+    }
+});
+
+app.post('/shell', (req, res) => {
+    const { path: cwd, cmd } = req.body;
+    if (!cmd.trim()) return res.send('');
+    
+    exec(cmd, { cwd: cwd || ROOT }, (error, stdout, stderr) => {
+        let output = `$ ${cmd}\n`;
+        if (stdout) output += stdout;
+        if (stderr) output += stderr;
+        if (error) output += `Error: ${error.message}`;
+        output += '\n';
+        res.send(output);
+    });
+});
 app.get('/download', (req, res) => res.download(req.query.file));
 app.get('/zip', (req, res) => {
     const dirPath = req.query.dir;
