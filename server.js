@@ -529,7 +529,7 @@ margin-bottom:8px;
                         try {
                             const data = JSON.parse(event.data);
                             if (data.type === 'thumb_update') {
-                                const img = document.querySelector('.media-item img[data-filename="${data.filename}"]');
+                                const img = document.querySelector('.media-item img[data-filename="\${data.filename}"]');
                                 if (img) {
                                     img.src = data.thumb;
                                     img.style.opacity = '1';
