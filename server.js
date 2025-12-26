@@ -32,59 +32,75 @@ const getIconClass = (f, isDir) => {
     return 'ri-file-line icon-default';
 };
 
-const renderItems = (currentDir) => {
-    const files = fs.readdirSync(currentDir);
-    const parentDir = path.resolve(currentDir, '..');
-    files.sort((a, b) => {
-        const aPath = path.resolve(currentDir, a);
-        const bPath = path.resolve(currentDir, b);
-        let aStat, bStat;
-        try { aStat = fs.statSync(aPath); bStat = fs.statSync(bPath); } catch(e) { return 0; }
-        if (aStat.isDirectory() && !bStat.isDirectory()) return -1;
-        if (!aStat.isDirectory() && bStat.isDirectory()) return 1;
-        return a.localeCompare(b);
-    });
-
-    let listHtml = `
-    <div class="item parent-dir" hx-get="/list?dir=${encodeURIComponent(parentDir)}" hx-target="#file-list">
-        <div class="file-info"><i class="ri-arrow-go-back-line"></i> <span>..</span></div>
-    </div>`;
-
-    listHtml += files.map(f => {
-        const fullPath = path.resolve(currentDir, f);
-        let stats;
-        try { stats = fs.statSync(fullPath); } catch(e) { return ''; }
-
-        const isDir = stats.isDirectory();
-        const ext = path.extname(f).toLowerCase();
-        const editable = ['.txt', '.js', '.json', '.html', '.css', '.md', '.py', '.sh', '.env', '.yaml', '.lua', '.php', '.xml', '.ini', '.conf'].includes(ext) || f.startsWith('.');
-        const isImg = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'].includes(ext);
-        const isVid = ['.mp4', '.webm', '.ogg', '.mov'].includes(ext);
-        const rawUrl = `/raw${fullPath}`;
-        const size = isDir ? '' : (stats.size > 1024 * 1024 ? (stats.size / (1024 * 1024)).toFixed(1) + ' MB' : (stats.size / 1024).toFixed(1) + ' KB');
-
-        return `
-        <div class="item file-row fade-in">
-            <div class="file-info">
-                <i class="${getIconClass(f, isDir)}"></i>
-                <div class="name-col">
-                    ${isDir ? `<a href="#" hx-get="/list?dir=${encodeURIComponent(fullPath)}" hx-target="#file-list">${f}</a>` :
-                      (isImg) ? `<a href="${rawUrl}" data-fancybox="gallery" data-caption="${f}">${f}</a>` :
-                      (isVid)?`<a href="${rawUrl}" data-fancybox data-type="html5video" data-caption="${f}" data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}'>${f}</a>`:
-                      `<a href="${rawUrl}" target="_blank">${f}</a>`}
-                    <span class="meta-size">${size}</span>
-                </div>
-            </div>
-            <div class="actions">
-                ${isDir ? `<a href="/zip?dir=${encodeURIComponent(fullPath)}" class="btn-icon" title="Zip"><i class="ri-archive-line"></i></a>` : ''}
-                ${!isDir && editable ? `<button class="btn-icon" hx-get="/edit?file=${encodeURIComponent(fullPath)}" hx-target="#file-list" title="Edit"><i class="ri-edit-2-line"></i></button>` : ''}
-                ${!isDir ? `<a href="/download?file=${encodeURIComponent(fullPath)}" class="btn-icon" title="Download"><i class="ri-download-line"></i></a>` : ''}
-                <button class="btn-icon" hx-get="/rename-prompt?dir=${encodeURIComponent(currentDir)}&old=${encodeURIComponent(f)}" hx-target="#file-list" title="Rename"><i class="ri-pencil-line"></i></button>
-                <button class="btn-icon delete" hx-get="/delete?dir=${encodeURIComponent(currentDir)}&name=${encodeURIComponent(f)}" hx-target="#file-list" hx-confirm="Delete ${f}?" title="Delete"><i class="ri-delete-bin-line"></i></button>
-            </div>
-        </div>`;
-    }).join('');
-    return listHtml;
+const renderItems=(currentDir)=>{
+const files=fs.readdirSync(currentDir);
+const parentDir=path.resolve(currentDir,'..');
+const mediaExts=['.jpg','.jpeg','.png','.gif','.webp','.svg','.mp4','.webm','.ogg','.mov'];
+files.sort((a,b)=>{
+const ap=path.resolve(currentDir,a),bp=path.resolve(currentDir,b);
+let as,bs;try{as=fs.statSync(ap);bs=fs.statSync(bp)}catch(e){return 0}
+if(as.isDirectory()&&!bs.isDirectory())return-1;
+if(!as.isDirectory()&&bs.isDirectory())return 1;
+return a.localeCompare(b)
+});
+const hasMedia=files.some(f=>{
+const p=path.resolve(currentDir,f);
+try{if(fs.statSync(p).isDirectory())return false}catch(e){return false}
+return mediaExts.includes(path.extname(f).toLowerCase())
+});
+let html=`
+<div class="item parent-dir" hx-get="/list?dir=${encodeURIComponent(parentDir)}" hx-target="#file-list">
+<div class="file-info"><i class="ri-arrow-go-back-line"></i><span>..</span></div>
+</div>`;
+if(hasMedia){
+html+=`<div class="media-grid">`;
+files.forEach(f=>{
+const full=path.resolve(currentDir,f);
+let s;try{s=fs.statSync(full)}catch(e){return}
+if(s.isDirectory())return;
+const ext=path.extname(f).toLowerCase();
+if(!mediaExts.includes(ext))return;
+const raw=`/raw${full}`;
+const isVid=['.mp4','.webm','.ogg','.mov'].includes(ext);
+html+=`
+<a class="media-item" href="${raw}" data-fancybox data-type="${isVid?'html5video':'image'}" ${isVid?`data-video='{"autoplay":true,"loop":true,"muted":true,"controls":false,"playsinline":true}'`:''} data-caption="${f}">
+${isVid?`<video src="${raw}" autoplay loop muted playsinline></video>`:`<img src="${raw}">`}
+</a>`;
+});
+html+=`</div>`;
+}
+files.forEach(f=>{
+const full=path.resolve(currentDir,f);
+let s;try{s=fs.statSync(full)}catch(e){return}
+const isDir=s.isDirectory();
+const ext=path.extname(f).toLowerCase();
+const editable=['.txt','.js','.json','.html','.css','.md','.py','.sh','.env','.yaml','.lua','.php','.xml','.ini','.conf'].includes(ext)||f.startsWith('.');
+const isImg=['.jpg','.jpeg','.png','.gif','.webp','.svg'].includes(ext);
+const isVid=['.mp4','.webm','.ogg','.mov'].includes(ext);
+const raw=`/raw${full}`;
+const size=isDir?'':(s.size>1048576?(s.size/1048576).toFixed(1)+' MB':(s.size/1024).toFixed(1)+' KB');
+html+=`
+<div class="item file-row fade-in">
+<div class="file-info">
+<i class="${getIconClass(f,isDir)}"></i>
+<div class="name-col">
+${isDir?`<a href="#" hx-get="/list?dir=${encodeURIComponent(full)}" hx-target="#file-list">${f}</a>`:
+isImg?`<a href="${raw}" data-fancybox data-caption="${f}">${f}</a>`:
+isVid?`<a href="${raw}" data-fancybox data-type="html5video" data-video='{"autoplay":true,"loop":true,"muted":true,"controls":true,"playsinline":true}' data-caption="${f}">${f}</a>`:
+`<a href="${raw}" target="_blank">${f}</a>`}
+<span class="meta-size">${size}</span>
+</div>
+</div>
+<div class="actions">
+${isDir?`<a href="/zip?dir=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-archive-line"></i></a>`:''}
+${!isDir&&editable?`<button class="btn-icon" hx-get="/edit?file=${encodeURIComponent(full)}" hx-target="#file-list"><i class="ri-edit-2-line"></i></button>`:''}
+${!isDir?`<a href="/download?file=${encodeURIComponent(full)}" class="btn-icon"><i class="ri-download-line"></i></a>`:''}
+<button class="btn-icon" hx-get="/rename-prompt?dir=${encodeURIComponent(currentDir)}&old=${encodeURIComponent(f)}" hx-target="#file-list"><i class="ri-pencil-line"></i></button>
+<button class="btn-icon delete" hx-get="/delete?dir=${encodeURIComponent(currentDir)}&name=${encodeURIComponent(f)}" hx-target="#file-list" hx-confirm="Delete ${f}?"><i class="ri-delete-bin-line"></i></button>
+</div>
+</div>`;
+});
+return html;
 };
 
 const layout = (content, currentPath) => `
@@ -114,6 +130,28 @@ const layout = (content, currentPath) => `
 --folder:#fff;
 --radius:8px;
 }
+    .media-grid{
+display:grid;
+grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+gap:10px;
+padding:10px;
+}
+.media-item{
+position:relative;
+aspect-ratio:1/1;
+overflow:hidden;
+border-radius:6px;
+background:#000;
+}
+.media-item img,
+.media-item video{
+width:100%;
+height:100%;
+object-fit:cover;
+display:block;
+}
+.media-item video{pointer-events:none}
+
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 body{
 background:var(--bg-app);
