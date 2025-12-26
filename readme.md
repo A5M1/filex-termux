@@ -15,11 +15,17 @@ Runs on Node.js using Express and HTMX with no build step.
 - Mobile friendly
 
 ## Requirements
-- `Node.js` (16+ recommended)
+- `Node.js`
+- `ffmpeg`
+- `sqlite`
 - `npm`
 
 ## Installation
-`npm install express multer archiver`
+```bash
+chmod +x ./setup.sh
+./setup.sh # install with ndk path properly exported. (will also install deps)
+npm install express multer archiver ws
+```
 
 ## Usage
 `node server.js`
