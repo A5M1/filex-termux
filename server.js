@@ -707,7 +707,7 @@ grid-template-columns:repeat(2,1fr);
                 if (currentPath !== savedPath) {
                     document.getElementById('path-display').value = savedPath;
                     document.querySelectorAll('[id^="p-"]').forEach(el => el.value = savedPath);
-                    document.querySelector('form[htmx-get="/list"]').requestSubmit();
+                    document.querySelector('form[hx-get="/list"]').requestSubmit();
                 }
             }
         });
