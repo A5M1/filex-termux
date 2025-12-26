@@ -237,9 +237,9 @@ const renderItems = (currentDir) => {
             
             if (isVid) {
                 if (thumb) {
-                    html += `<img src="${thumb}" loading="lazy" data-filename="${f}">`;
+                    html += `<img src="${thumb}" loading="lazy" data-filename="${f}" data-video="${raw}">`;
                 } else {
-                    html += `<video preload="metadata" muted playsinline data-filename="${f}"></video>`;
+                    html += `<video preload="metadata" muted playsinline data-filename="${f}" data-video="${raw}"></video>`;
                 }
             } else {
                 html += `<img src="${raw}" loading="lazy" decoding="async">`;
@@ -322,6 +322,12 @@ display:block;
 .media-item video{
 pointer-events:none;
 background:#000;
+}
+.media-item img:hover{
+cursor:pointer;
+}
+.media-item video:hover{
+cursor:pointer;
 }
    
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
@@ -489,6 +495,9 @@ margin-bottom:8px;
 .fade-in{animation:fadeIn .2s ease-in;}
 @keyframes fadeIn{from{opacity:0;transform:translateY(2px);}to{opacity:1;transform:translateY(0);}}
 @media(max-width:600px){
+.media-grid{
+grid-template-columns:repeat(2,1fr);
+}
 .controls{grid-template-columns:1fr;}
 .toolbar{width:100%;}
 .toolbar input{flex-grow:1;}
@@ -588,6 +597,84 @@ margin-bottom:8px;
                     ws.onclose = () => console.log('WebSocket disconnected for', dir);
                 }
             }
+
+            document.querySelectorAll('.media-item').forEach(item => {
+                const img = item.querySelector('img');
+                if (img && img.dataset.video) {
+                    let touchTimer;
+                    
+                    img.addEventListener('mouseenter', () => {
+                        const preview = document.createElement('video');
+                        preview.src = img.dataset.video;
+                        preview.style.position = 'absolute';
+                        preview.style.top = '0';
+                        preview.style.left = '0';
+                        preview.style.width = '100%';
+                        preview.style.height = '100%';
+                        preview.style.objectFit = 'cover';
+                        preview.style.pointerEvents = 'none';
+                        preview.style.opacity = '0';
+                        preview.muted = true;
+                        preview.loop = true;
+                        preview.playsInline = true;
+                        preview.preload = 'auto';
+                        item.appendChild(preview);
+                        
+                        setTimeout(() => {
+                            preview.style.opacity = '1';
+                        }, 50);
+                        
+                        preview.play().catch(() => {});
+                    });
+                    
+                    img.addEventListener('mouseleave', () => {
+                        const preview = item.querySelector('video');
+                        if (preview) {
+                            preview.style.opacity = '0';
+                            setTimeout(() => {
+                                preview.remove();
+                            }, 150);
+                        }
+                    });
+                    
+                    img.addEventListener('touchstart', () => {
+                        touchTimer = setTimeout(() => {
+                            const preview = document.createElement('video');
+                            preview.src = img.dataset.video;
+                            preview.style.position = 'absolute';
+                            preview.style.top = '0';
+                            preview.style.left = '0';
+                            preview.style.width = '100%';
+                            preview.style.height = '100%';
+                            preview.style.objectFit = 'cover';
+                            preview.style.pointerEvents = 'none';
+                            preview.style.opacity = '0';
+                            preview.muted = true;
+                            preview.loop = true;
+                            preview.playsInline = true;
+                            preview.preload = 'auto';
+                            item.appendChild(preview);
+                            
+                            setTimeout(() => {
+                                preview.style.opacity = '1';
+                            }, 50);
+                            
+                            preview.play().catch(() => {});
+                        }, 1000);
+                    });
+                    
+                    img.addEventListener('touchend', () => {
+                        clearTimeout(touchTimer);
+                        const preview = item.querySelector('video');
+                        if (preview) {
+                            preview.style.opacity = '0';
+                            setTimeout(() => {
+                                preview.remove();
+                            }, 150);
+                        }
+                    });
+                }
+            });
         });
     </script>
 </body>
